@@ -1,10 +1,9 @@
 from configparser import ConfigParser
 
 
-def config(filename=r'/database.ini', section='postgresql'):
+def config(filename='database.ini', section='postgresql'):
     parser = ConfigParser()
     parser.read(filename)
-    # получить раздел, по умолчанию postgresql
     db = {}
 
     if parser.has_section(section):
@@ -15,4 +14,6 @@ def config(filename=r'/database.ini', section='postgresql'):
             db[param[0]] = param[1]
         else:
             raise Exception("Раздел {0} не найдено в {1} файл".format(section, filename))
+    db['user'] = 'postgres'
+    db['password'] = 'iLmF-13.'
     return db

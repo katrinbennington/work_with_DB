@@ -1,8 +1,8 @@
-import requests
-import psycopg2
+import json
 from typing import Any
 
-employer_ids = [9694561, 4219, 5919632, 5667343, 9301808, 774144, 10571093, 198614, 6062708, 4306]
+import requests
+import psycopg2
 
 
 def get_employee_data():
@@ -10,114 +10,112 @@ def get_employee_data():
     функция для получения данных о компаниях с сайта HH.ru
     :return: список компаний
     """
-    employers = []
-    for employer_id in employer_ids:
-        url_emp = f"https://api.hh.ru/employers/{employer_id}"
-        employer_info = requests.get(url_emp, ).json()
-        employers.append(employer_info)
+    with open('10_companies.json', 'r', encoding='utf-8') as f:
+        employer_id = json.load(f)[0]
 
-    return employers
+    data = []
+
+    for company_name, company_id in employer_id .items():
+        company_url = f"https://hh.ru/employer/{company_id}"
+        company_info = {'company_id': company_id, 'company_name': company_name, 'company_url': company_url}
+        data.append(company_info)
+
+    return data
 
 
-def get_vacancies_data():
+def get_vacancies(data):
     """
-    функция для получения данных о вакансиях с сайта HH.ru
-    :return: список вакансий
+    Получить данные о вакансиях с сайта hh.ru
     """
-    vacancy = []
-    for vacacies_id in employer_ids:
-        url_vac = f"https://api.hh.ru/vacancies?employer_id={vacacies_id}"
-        vacancy_info = requests.get(url_vac, params={'page': 0, 'per_page': 100}).json()
-        vacancy.extend(vacancy_info['items'])
-    return vacancy
+    vacancies_info = []
+    for company_data in data:
+        company_id = company_data['company_id']
+        url = f"https://api.hh.ru/vacancies?employer_id={company_id}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            vacancies = response.json()['items']
+            vacancies_info.extend(vacancies)
+        else:
+            print(f"Ошибка при запросе к API для компании {company_data['company_name']}: {response.status_code}")
+    return vacancies_info
 
 
 def create_database(database_name: str, params: dict) -> None:
     """
-    функция для создания Базы Данных и создания таблиц в БД
+    Создание базы данных для сохранения данных о компаниях и вакансиях
     """
-    conn = psycopg2.connect(database='postgres', user='postgres', password='iLmF-13.')
+    conn = psycopg2.connect(dbname='postgres', **params)
     conn.autocommit = True
     cur = conn.cursor()
 
-    cur.execute(f'DROP DATABASE IF EXISTS {database_name}')
-    cur.execute(f'CREATE DATABASE {database_name}')
+    try:
+        cur.execute(f"DROP DATABASE {database_name}")
+    except Exception as e:
+        print(f"Ошибка создания базы данных: {e}")
+    finally:
+        cur.execute(f"CREATE DATABASE {database_name}")
 
+    cur.close()
     conn.close()
 
-    conn = psycopg2.connect(database=database_name, user='postgres', password='iLmF-13.')
-
+    conn = psycopg2.connect(dbname=database_name, **params)
     with conn.cursor() as cur:
         cur.execute("""
-            DROP TABLE IF EXISTS employers;
-            CREATE TABLE employers (
-                employer_id INTEGER,
-                employer_name text not null,
-                employer_area TEXT not null,
-                url TEXT,
-                open_vacancies INTEGER
-            );
+            CREATE TABLE companies (
+            company_id integer PRIMARY KEY,
+            company_name varchar(50) NOT NULL,
+            company_url text
+            )
         """)
 
     with conn.cursor() as cur:
         cur.execute("""
-            DROP TABLE IF EXISTS vacancy;
-            CREATE TABLE vacancy (
-                vacancy_id INTEGER,
-                vacancy_name VARCHAR,
-                vacancy_area VARCHAR,
-                salary INTEGER,
-                employer_id INTEGER,
-                vacancy_url VARCHAR
-            );
+            CREATE TABLE vacancies (
+            vacancy_id text PRIMARY KEY,
+            company_id integer REFERENCES companies(company_id),
+            vacancy_name varchar(100) NOT NULL,
+            requirement varchar(255),
+            salary_min integer,
+            salary_max integer,
+            currency varchar(50),
+            vacancy_url text
+            )
         """)
 
     conn.commit()
     conn.close()
 
 
-def save_data_to_database_emp(data_emp: list[dict[str, Any]], database_name: str, params: dict) -> None:
-    """
-    Функция для заполнения таблицы компаний в БД
-    """
-    conn = psycopg2.connect(database='postgres', user='postgres', password='iLmF-13.')
+def save_data_to_database(companies_data: list[dict[str, Any]],
+                    vacancies_data: list[dict[str, Any]], database_name: str, params: dict) -> None:
+    """Сохранение данных о компаниях и вакансиях в базу данных."""
+    conn = psycopg2.connect(dbname=database_name, **params)
 
     with conn.cursor() as cur:
-        for emp in data_emp:
-            open_vacancies = emp.get('open_vacancies', 0)  # Add this line to handle missing 'open_vacancies' key
+        for company in companies_data:
+            company_id = company['company_id']
+            company_name = company['company_name']
+            company_url = company['company_url']
             cur.execute("""
-                INSERT INTO employers (employer_id, employer_name, employer_area, url, open_vacancies)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                        (emp['id'], emp['name'], emp['area']['name'], emp['alternate_url'], open_vacancies))
+                INSERT INTO companies (company_id, company_name, company_url)
+                VALUES (%s, %s, %s)
+            """, (company_id, company_name, company_url))
 
-    conn.commit()
-    conn.close()
-
-
-def save_data_to_database_vac(data_vac: list[dict[str, Any]], database_name: str, params: dict) -> None:
-    """
-    Функция для заполнения таблицы вакансий в БД
-    """
-
-    conn = psycopg2.connect(database='postgres', user='postgres', password='iLmF-13.')
-
-    with conn.cursor() as cur:
-        for vac in data_vac:
-            if vac['salary'] is None or vac['salary']['from'] is None:
-                cur.execute("""
-                   INSERT INTO vacancy (vacancy_id, vacancy_name, vacancy_area, salary, employer_id, vacancy_url)
-                   VALUES (%s, %s, %s, %s, %s, %s)
-                   """,
-                            (vac.get('id'), vac['name'], vac['area']['name'], 0, vac['employer']['id'],
-                             vac['alternate_url']))
-            else:
-                cur.execute("""
-                    INSERT INTO vacancy (vacancy_id, vacancy_name, vacancy_area, salary, employer_id, vacancy_url)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                            (vac.get('id'), vac['name'], vac['area']['name'], vac['salary']['from'],
-                             vac['employer']['id'], vac['alternate_url']))
+        for vacancy in vacancies_data:
+            vacancy_id = vacancy['id']
+            company_id = vacancy['employer']['id']
+            vacancy_name = vacancy['name']
+            requirement = vacancy['snippet'].get('requirement', None)
+            salary = vacancy['salary']
+            salary_min = salary.get('from') if salary else None
+            salary_max = salary.get('to') if salary else None
+            currency = salary.get('currency', None) if salary else None
+            vacancy_url = vacancy['alternate_url']
+            cur.execute("""
+                INSERT INTO vacancies (vacancy_id, company_id, vacancy_name, requirement, salary_min, salary_max,
+                currency, vacancy_url)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (vacancy_id, company_id, vacancy_name, requirement, salary_min, salary_max, currency, vacancy_url))
 
     conn.commit()
     conn.close()

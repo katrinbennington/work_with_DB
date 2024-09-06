@@ -4,48 +4,63 @@ import psycopg2
 class DBManager:
     def __init__(self, params):
         self.conn = psycopg2.connect(dbname='hh', **params)
-        self.cur = self.conn.cursor()
+        self.cursor = self.conn.cursor()
 
     def get_companies_and_vacancies_count(self):
+        """
+        получает список всех компаний и количество вакансий у каждой компании
+        """
         self.cursor.execute("""
-            SELECT c.name, COUNT(v.id) as vacancies_count
+            SELECT c.company_name, COUNT(v.vacancy_id) AS vacancy_counter 
             FROM companies c
-            JOIN vacancies v ON c.id = v.company_id
-            GROUP BY c.id
+            LEFT JOIN vacancies v USING(company_id)
+            GROUP BY c.company_name;
         """)
         return self.cursor.fetchall()
 
     def get_all_vacancies(self):
+        """
+        получает список всех вакансий с указанием названия компании,
+        названия вакансии и зарплаты и ссылки на вакансию
+        """
         self.cursor.execute("""
-            SELECT c.name, v.title, v.salary, v.link
+            SELECT c.company_name, v.vacancy_name, v.salary_min, v.salary_max, v.vacancy_url
             FROM companies c
-            JOIN vacancies v ON c.id = v.company_id
+            JOIN vacancies v USING(company_id);
         """)
         return self.cursor.fetchall()
 
     def get_avg_salary(self):
+        """
+        получает среднюю зарплату по вакансиям
+        """
         self.cursor.execute("""
-            SELECT AVG(salary) FROM vacancies
+            SELECT ROUND(AVG((salary_min + salary_max) / 2)) AS avg_salary
+            FROM vacancies;
         """)
         return self.cursor.fetchone()[0]
 
     def get_vacancies_with_higher_salary(self):
-        avg_salary = self.get_avg_salary()
+        """
+        получает список всех вакансий, у которых зарплата выше средней по всем вакансиям
+        """
         self.cursor.execute("""
-            SELECT c.name, v.title, v.salary, v.link
-            FROM companies c
-            JOIN vacancies v ON c.id = v.company_id
-            WHERE v.salary > %s
-        """, (avg_salary,))
+            SELECT * FROM vacancies
+            WHERE (salary_min + salary_max) > 
+            (SELECT AVG(salary_min + salary_max) FROM vacancies);
+        """)
         return self.cursor.fetchall()
 
     def get_vacancies_with_keyword(self, keyword):
-        self.cursor.execute("""
-            SELECT c.name, v.title, v.salary, v.link
-            FROM companies c
-            JOIN vacancies v ON c.id = v.company_id
-            WHERE v.title ILIKE %s
-        """, ('%' + keyword + '%',))
+        """
+        получает список всех вакансий,
+        в названии которых содержатся переданные в метод слова
+        """
+        query = """
+                SELECT * FROM vacancies
+                WHERE LOWER(vacancy_name) LIKE %s
+                """
+        self.cursor.execute(query, ('%' + keyword.lower() + '%',))
         return self.cursor.fetchall()
 
     def close(self):
